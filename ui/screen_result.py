@@ -79,9 +79,22 @@ class ScreenResult(tk.Frame):
             fg=T.TEXT_ON_DARK,
         ).pack(pady=(T.PAD_SM, 0))
 
+        # ── Pie ───────────────────────────────────────────────────────────────
+        # Se ancla al fondo ANTES del cuerpo para que el botón "Procesar más"
+        # quede SIEMPRE visible, aunque el detalle por documento sea largo.
+        footer = tk.Frame(self, bg=T.BG, padx=T.PAD_XL, pady=T.PAD_BASE)
+        footer.pack(side="bottom", fill="x")
+
+        Divider(footer).pack(fill="x", pady=(0, T.PAD_BASE))
+        PrimaryButton(
+            footer,
+            text="+ Procesar más documentos",
+            command=self._on_new,
+        ).pack(side="right")
+
         # ── Cuerpo ────────────────────────────────────────────────────────────
         body = tk.Frame(self, bg=T.BG)
-        body.pack(fill="both", expand=True, padx=T.PAD_BASE, pady=T.PAD_BASE)
+        body.pack(side="top", fill="both", expand=True, padx=T.PAD_BASE, pady=T.PAD_BASE)
 
         # Tarjeta de estadísticas
         stats_card = tk.Frame(body, bg=T.SURFACE, padx=T.CARD_PAD, pady=T.CARD_PAD)
@@ -153,18 +166,6 @@ class ScreenResult(tk.Frame):
         if r.documentos:
             self._build_detalle_documentos(body, r.documentos)
 
-        # ── Pie ───────────────────────────────────────────────────────────────
-        footer = tk.Frame(self, bg=T.BG, padx=T.PAD_XL, pady=T.PAD_BASE)
-        footer.pack(fill="x")
-
-        Divider(footer).pack(fill="x", pady=(0, T.PAD_BASE))
-
-        PrimaryButton(
-            footer,
-            text="+ Procesar más documentos",
-            command=self._on_new,
-        ).pack(side="right")
-
     def _build_detalle_documentos(self, body, documentos: list):
         """Tarjeta con el detalle por documento: estado, tipo/NCF y problemas."""
         card = tk.Frame(body, bg=T.SURFACE, padx=T.CARD_PAD, pady=T.CARD_PAD)
@@ -194,7 +195,7 @@ class ScreenResult(tk.Frame):
             bd=0,
             state="disabled",
             wrap="word",
-            height=12,
+            height=8,
             spacing3=2,
         )
         scroll = tk.Scrollbar(wrap, command=txt.yview)
