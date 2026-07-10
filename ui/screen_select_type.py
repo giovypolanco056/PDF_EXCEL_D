@@ -17,13 +17,22 @@ class ScreenSelectType(tk.Frame):
     Muestra una cuadrícula de tarjetas, una por tipo disponible.
     """
 
-    def __init__(self, parent, on_select: Callable[[str], None], **kw):
+    def __init__(
+        self,
+        parent,
+        on_select: Callable[[str], None],
+        selected_id: str | None = None,
+        **kw,
+    ):
         kw.setdefault("bg", T.BG)
         super().__init__(parent, **kw)
         self._on_select = on_select
         self._selected: str | None = None
         self._cards: dict[str, tk.Frame] = {}
         self._build()
+        # Recordar la selección previa al volver a esta pantalla
+        if selected_id and selected_id in self._cards:
+            self._select(selected_id)
 
     def _build(self):
         # ── Cabecera ──────────────────────────────────────────────────────────

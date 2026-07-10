@@ -1,6 +1,0 @@
-2026-07-06 11:51:24,492 | INFO     | pdf2excel | [Factura] Procesando: 600004597.pdf
-2026-07-06 11:51:24,597 | INFO     | pdf2excel | [Factura] Procesando: 600004598.pdf
-2026-07-06 11:51:24,681 | INFO     | pdf2excel | Lote completado — exitosos=2 omitidos=0 fallidos=0
-2026-07-06 14:07:11,913 | INFO     | pdf2excel | [Nota de Crédito] Procesando: 800001205.pdf
-2026-07-06 14:07:11,991 | INFO     | pdf2excel | [Nota de Crédito] Procesando: 800001206 - copia.pdf
-2026-07-06 14:07:12,068 | INFO     | pdf2excel | Lote completado — exitosos=2 omitidos=0 fallidos=0

@@ -28,6 +28,8 @@ class ScreenSelectFiles(tk.Frame):
         type_id: str,
         on_back: Callable,
         on_process: Callable[[list[str]], None],
+        initial_paths: list[str] | None = None,
+        on_change: Callable[[list[str]], None] | None = None,
         **kw,
     ):
         kw.setdefault("bg", T.BG)
@@ -35,8 +37,13 @@ class ScreenSelectFiles(tk.Frame):
         self._type_id = type_id
         self._on_back = on_back
         self._on_process = on_process
-        self._pdf_paths: list[str] = []
+        self._on_change = on_change
+        self._pdf_paths: list[str] = list(initial_paths or [])
         self._build()
+        self._enable_drag_and_drop()
+        # Mostrar la selección recordada al volver a esta pantalla
+        if self._pdf_paths:
+            self._refresh_list()
 
     def _build(self):
         doc_type = get_type(self._type_id)
@@ -128,9 +135,13 @@ class ScreenSelectFiles(tk.Frame):
         self._file_list = FileListBox(list_frame)
         self._file_list.pack(fill="both", expand=True, padx=T.PAD_SM, pady=T.PAD_SM)
 
+        self._list_frame = list_frame   # objetivo del drag-and-drop
+
         self._lbl_empty = tk.Label(
             list_frame,
-            text="Ningún archivo seleccionado.\nUsa los botones de arriba para agregar PDFs.",
+            text="Ningún archivo seleccionado.\n\n"
+                 "Arrastra aquí tus PDFs  📥\n"
+                 "o usa los botones de arriba.",
             font=T.FONT_BASE,
             bg=T.SURFACE,
             fg=T.TEXT_DISABLED,
@@ -181,10 +192,43 @@ class ScreenSelectFiles(tk.Frame):
                 self._pdf_paths.append(p)
                 existing.add(p)
         self._refresh_list()
+        self._notify_change()
 
     def _clear(self):
         self._pdf_paths = []
         self._refresh_list()
+        self._notify_change()
+
+    def _notify_change(self):
+        """Avisa al orquestador para conservar la selección al navegar."""
+        if self._on_change:
+            self._on_change(list(self._pdf_paths))
+
+    # ── Arrastrar y soltar ────────────────────────────────────────────────────
+    def _enable_drag_and_drop(self):
+        """Registra el área de la lista como zona para soltar archivos.
+        Silencioso si tkinterdnd2 no está disponible."""
+        try:
+            from tkinterdnd2 import DND_FILES
+        except Exception:
+            return
+        for widget in (self._list_frame, self._file_list, self._lbl_empty):
+            try:
+                widget.drop_target_register(DND_FILES)
+                widget.dnd_bind("<<Drop>>", self._on_drop)
+            except Exception:
+                pass
+
+    def _on_drop(self, event):
+        # event.data trae las rutas separadas por espacios y, si contienen
+        # espacios, encerradas en llaves: "{C:\a b\x.pdf} C:\y.pdf".
+        # tk.splitlist las separa correctamente.
+        try:
+            rutas = self.tk.splitlist(event.data)
+        except Exception:
+            rutas = event.data.split()
+        if rutas:
+            self._add_paths(list(rutas))
 
     def _refresh_list(self):
         from utils.files import collect_pdfs

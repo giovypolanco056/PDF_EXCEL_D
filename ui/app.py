@@ -14,8 +14,18 @@ from typing import Optional
 from processors.engine import ProcessResult
 from ui import theme as T
 
+# Soporte de arrastrar-y-soltar archivos (opcional). Si tkinterdnd2 no está
+# instalado, la app funciona igual pero sin drag-and-drop.
+try:
+    from tkinterdnd2 import TkinterDnD
+    _BaseTk = TkinterDnD.Tk
+    DND_DISPONIBLE = True
+except Exception:       # pragma: no cover - depende del entorno
+    _BaseTk = tk.Tk
+    DND_DISPONIBLE = False
 
-class App(tk.Tk):
+
+class App(_BaseTk):
     """Ventana raíz de la aplicación."""
 
     # Tamaño fijo de la ventana — grande para facilidad de uso
@@ -64,15 +74,21 @@ class App(tk.Tk):
 
     def show_select_type(self):
         from ui.screen_select_type import ScreenSelectType
-        self._swap(ScreenSelectType(self, on_select=self._on_type_selected))
+        self._swap(ScreenSelectType(
+            self,
+            on_select   = self._on_type_selected,
+            selected_id = self._type_id,   # recordar selección al volver
+        ))
 
     def show_select_files(self):
         from ui.screen_select_files import ScreenSelectFiles
         self._swap(ScreenSelectFiles(
             self,
-            type_id    = self._type_id,
-            on_back    = self.show_select_type,
-            on_process = self._on_files_confirmed,
+            type_id       = self._type_id,
+            on_back       = self.show_select_type,
+            on_process    = self._on_files_confirmed,
+            initial_paths = self._pdf_paths,          # recordar archivos al volver
+            on_change     = self._on_paths_changed,   # persistir en vivo
         ))
 
     def show_processing(self):
@@ -97,11 +113,18 @@ class App(tk.Tk):
     # ── Callbacks entre pantallas ─────────────────────────────────────────────
 
     def _on_type_selected(self, type_id: str):
+        # Si cambia el tipo, la selección de archivos previa sigue siendo válida
+        # (son PDFs); solo se reprocesarán con la nueva plantilla.
         self._type_id = type_id
         self.show_select_files()
 
+    def _on_paths_changed(self, pdf_paths: list[str]):
+        """La pantalla de archivos avisa cada cambio para no perder la
+        selección al ir atrás/adelante entre pantallas."""
+        self._pdf_paths = list(pdf_paths)
+
     def _on_files_confirmed(self, pdf_paths: list[str]):
-        self._pdf_paths = pdf_paths
+        self._pdf_paths = list(pdf_paths)
         self.show_processing()
 
     def _on_processing_done(self, result: "ProcessResult"):

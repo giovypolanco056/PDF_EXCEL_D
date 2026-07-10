@@ -8,19 +8,38 @@ from typing import Optional
 import os
 
 
+def _es_pdf_por_contenido(path: Path) -> bool:
+    """True si el archivo empieza con la firma %PDF-, sin importar su
+    extensión (permite aceptar PDFs mal nombrados o sin extensión)."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
 def collect_pdfs(paths: list[str]) -> list[Path]:
     """
-    Recibe una lista de rutas (archivos o carpetas) y devuelve
-    todos los PDF encontrados, sin duplicados, ordenados.
+    Recibe una lista de rutas (archivos o carpetas) y devuelve todos los
+    PDF encontrados, sin duplicados y ordenados.
+
+    Robusto ante formato y posición:
+      - Carpetas: se recorren de forma RECURSIVA (rglob), así que los PDF
+        se encuentran aunque estén en subcarpetas.
+      - Extensión sin importar mayúsculas/minúsculas (.pdf, .PDF, .Pdf…).
+      - Archivos seleccionados directamente: se aceptan aunque no tengan
+        extensión .pdf, si su contenido es realmente un PDF (firma %PDF-).
     """
     found: set[Path] = set()
     for raw in paths:
         p = Path(raw)
         if p.is_dir():
-            found.update(p.glob("*.pdf"))
-            found.update(p.glob("*.PDF"))
-        elif p.is_file() and p.suffix.lower() == ".pdf":
-            found.add(p)
+            for f in p.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".pdf":
+                    found.add(f)
+        elif p.is_file():
+            if p.suffix.lower() == ".pdf" or _es_pdf_por_contenido(p):
+                found.add(p)
     return sorted(found)
 
 

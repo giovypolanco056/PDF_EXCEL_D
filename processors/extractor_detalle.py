@@ -52,6 +52,13 @@ _PAT_CANTIDAD_UNIDAD = re.compile(
     r"^(.*?)\s+([\d]+(?:[.,]\d+)?)\s+([A-Za-z]+%?)\s*$"
 )
 
+# Formato de un IMPORTE monetario: dígitos con separador de miles opcional
+# y 1-2 decimales (p.ej. "22,789,532.00", "1708.18", "-5,124.53").
+# Se usa para localizar el monto por su FORMA, no por su posición X, de modo
+# que la extracción funcione aunque la columna esté en otro lugar. Un año
+# suelto como "2025"/"2026" NO cumple (no tiene decimales) y se ignora.
+_PAT_MONTO = re.compile(r"^-?\d[\d,]*\.\d{1,2}$")
+
 
 def _convertir_monto(valor: str) -> Optional[float]:
     """Convierte montos con formato '131,453.24' a float."""
@@ -132,28 +139,8 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
 
     top_cabecera = palabra_concepto["top"]
 
-    # La palabra de monto debe estar en la MISMA fila que "Concepto"
-    # (es el encabezado de columna, no cualquier "RD$"/"USD" del texto,
-    # que podría aparecer antes en subtítulos o totales).
-    palabra_total_rd = next(
-        (w for w in palabras
-         if ("RD$" in w["text"] or "USD" in w["text"])
-         and abs(w["top"] - top_cabecera) <= 3),
-        None,
-    )
-    # Respaldo: si no hay ninguna en la fila de cabecera, tomar la primera.
-    if palabra_total_rd is None:
-        palabra_total_rd = next(
-            (w for w in palabras if "RD$" in w["text"] or "USD" in w["text"]),
-            None,
-        )
-
-    if palabra_total_rd is None:
-        return []
-
-    x_inicio_monto = palabra_total_rd["x0"] - 15  # margen de tolerancia
-
-    # Línea de "Total en RD$" marca el fin de la tabla
+    # Fin de la tabla: la primera fila "Total …" posterior a la cabecera.
+    # (Ancla de texto, no de coordenadas: funciona esté donde esté la tabla.)
     palabra_fin = next(
         (w for w in palabras
          if w["text"].strip().lower() == "total" and w["top"] > top_cabecera),
@@ -161,7 +148,7 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
     )
     top_fin = palabra_fin["top"] if palabra_fin else float("inf")
 
-    # Palabras entre cabecera y "Total"
+    # Palabras entre la cabecera y el "Total"
     palabras_tabla = [
         w for w in palabras
         if w["top"] > top_cabecera + 2 and w["top"] < top_fin
@@ -171,14 +158,26 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
 
     detalle = []
     for linea in lineas:
-        palabras_desc  = [w for w in linea if w["x0"] < x_inicio_monto]
-        palabras_monto = [w for w in linea if w["x0"] >= x_inicio_monto]
+        # Reconstruir la fila ordenando por posición horizontal.
+        linea_ord = sorted(linea, key=lambda w: w["x0"])
 
-        texto_desc  = " ".join(w["text"] for w in palabras_desc).strip()
-        texto_monto = " ".join(w["text"] for w in palabras_monto).strip()
+        # El importe es el ÚLTIMO token con FORMATO monetario. Localizarlo por
+        # su forma (dígitos + decimales) y no por su coordenada X hace la
+        # extracción independiente de la posición: da igual en qué columna
+        # esté el monto, o que los números grandes empiecen más a la izquierda.
+        idx_monto = None
+        for i in range(len(linea_ord) - 1, -1, -1):
+            if _PAT_MONTO.match(linea_ord[i]["text"].strip()):
+                idx_monto = i
+                break
 
-        # Saltar filas sin monto numérico (subtítulos, encabezados intermedios)
-        if not texto_desc or not texto_monto or not _es_numero(texto_monto):
+        if idx_monto is None:
+            continue  # fila sin importe (subtítulo, encabezado intermedio, etc.)
+
+        texto_monto = linea_ord[idx_monto]["text"].strip()
+        texto_desc  = " ".join(w["text"] for w in linea_ord[:idx_monto]).strip()
+
+        if not texto_desc:
             continue
 
         monto = _convertir_monto(texto_monto)

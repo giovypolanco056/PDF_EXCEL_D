@@ -26,8 +26,11 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
 # ── Estilos ───────────────────────────────────────────────────────────────────
-ROJO_HDR   = PatternFill("solid", start_color="FF0000", end_color="FF0000")
-GRIS_HDR   = PatternFill("solid", start_color="333333", end_color="333333")
+# Encabezados en gris (antes rojo). GRIS_HDR = gris medio para las columnas
+# que existen en ambas filas (E y D); GRIS_HDR_OSC = gris oscuro para las
+# columnas que solo aplican a la fila E.
+GRIS_HDR     = PatternFill("solid", start_color="595959", end_color="595959")
+GRIS_HDR_OSC = PatternFill("solid", start_color="333333", end_color="333333")
 AZUL_E     = PatternFill("solid", start_color="D9E1F2", end_color="D9E1F2")
 FUENTE_HDR = Font(bold=True, color="FFFFFF", size=10)
 FUENTE_E   = Font(bold=True, size=10)
@@ -37,6 +40,19 @@ FORMATO_FECHA = "DD/MM/YYYY"
 FORMATO_NUM   = "#,##0.00"
 
 NOMBRE_HOJA = "Facturacion"
+
+# Palabras clave (en el encabezado de la columna) que identifican una columna
+# MONETARIA. Sirve para dar a los importes el formato numérico de moneda
+# (#,##0.00), sin depender de la posición ni de la plantilla concreta.
+_PALABRAS_MONETARIAS = ("precio", "monto", "valor descuento", "tasa cambio")
+
+
+def _es_columna_monetaria(encabezado) -> bool:
+    """True si el encabezado de la columna corresponde a un importe."""
+    if not encabezado:
+        return False
+    h = str(encabezado).lower()
+    return any(p in h for p in _PALABRAS_MONETARIAS)
 
 # Fecha de expiración del NCF (autorización e-CF de la DGII). Es un valor
 # FIJO que no aparece en el PDF; el portal EGEHID lo exige en la columna
@@ -461,12 +477,12 @@ def _escribir_encabezados(hoja, cols):
     for col_num, clave, h1, h2, ancho in cols:
         c1 = hoja.cell(row=1, column=col_num, value=h1)
         c1.font      = FUENTE_HDR
-        c1.fill      = ROJO_HDR
+        c1.fill      = GRIS_HDR
         c1.alignment = alin_c
 
         c2 = hoja.cell(row=2, column=col_num, value=h2)
         c2.font      = FUENTE_HDR
-        c2.fill      = ROJO_HDR if h2 else GRIS_HDR
+        c2.fill      = GRIS_HDR if h2 else GRIS_HDR_OSC
         c2.alignment = alin_c
 
         hoja.column_dimensions[get_column_letter(col_num)].width = ancho
@@ -507,13 +523,18 @@ def _escribir_hoja(wb: Workbook, filas: list, cols: list, hoja_existente: bool =
         num_fila += 1
         tipo     = fila_dict.get("_tipo", "E")
 
-        for col_num, clave, *_ in cols:
+        for col_num, clave, h1, h2, *_ in cols:
             valor = fila_dict.get(clave)
             celda = hoja.cell(row=num_fila, column=col_num, value=valor)
 
+            # Encabezado real de esta columna según la fila (E usa fila 1, D fila 2)
+            encabezado_col = h1 if tipo == "E" else h2
+
             if isinstance(valor, datetime):
                 celda.number_format = FORMATO_FECHA
-            elif clave == "moneda" and tipo == "D" and isinstance(valor, (int, float)):
+            elif isinstance(valor, (int, float)) and _es_columna_monetaria(encabezado_col):
+                # Importes (Precio Unitario, Monto…) como número con formato
+                # de moneda, no como texto ni número plano.
                 celda.number_format = FORMATO_NUM
 
             celda.alignment = alin_nota if clave == "nota" else alin_izq

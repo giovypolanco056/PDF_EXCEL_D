@@ -17,6 +17,7 @@ from typing import Callable, Optional
 import pdfplumber
 
 from utils.logger import get_logger
+from processors.diagnostico import diagnosticar
 
 log = get_logger()
 
@@ -67,38 +68,30 @@ class BaseProcessor(ABC):
 
         encabezado = self.extraer_encabezado(texto_completo)
 
-        # Advertir sobre campos faltantes sin detener el proceso
-        campos_clave = ["ncf", "numero_documento", "fecha_documento"]
-        faltantes = [c for c in campos_clave if not encabezado.get(c)]
-        if faltantes and on_warning:
-            on_warning(f"{ruta_pdf.name}: campos no encontrados: {', '.join(faltantes)}")
-            log.warning(f"[{self.nombre}] {ruta_pdf.name}: campos faltantes: {faltantes}")
-
         detalle = self.extraer_detalle(
             palabras_todas,
             numero_documento=encabezado.get("numero_documento"),
         )
-        if not detalle and on_warning:
-            on_warning(f"{ruta_pdf.name}: no se encontraron líneas de detalle")
-            log.warning(f"[{self.nombre}] {ruta_pdf.name}: sin líneas de detalle")
 
-        # Validar cuadre de totales
-        total_enc = encabezado.get("total")
-        if total_enc is not None and detalle:
-            suma = sum((l.get("monto") or 0) for l in detalle)
-            if abs(total_enc - suma) >= 0.01:
-                msg = (
-                    f"{ruta_pdf.name}: total no cuadra — "
-                    f"encabezado={total_enc:.2f}, detalle={suma:.2f}"
-                )
-                if on_warning:
-                    on_warning(msg)
-                log.warning(f"[{self.nombre}] {msg}")
+        # Diagnóstico detallado: reportar EXACTAMENTE qué problemas tiene el
+        # documento (campos ausentes, sin detalle, total que no cuadra…), sin
+        # detener el proceso. Tolera facturas que no presenten algún campo.
+        problemas = diagnosticar(encabezado, detalle)
+        for severidad, msg in problemas:
+            marca = "✗" if severidad == "error" else "⚠"
+            texto = f"{ruta_pdf.name}: {marca} {msg}"
+            if on_warning:
+                on_warning(texto)
+            if severidad == "error":
+                log.warning(f"[{self.nombre}] {texto}")
+            else:
+                log.info(f"[{self.nombre}] {texto}")
 
         return {
             "encabezado": encabezado,
             "detalle": detalle,
             "ruta_pdf": ruta_pdf,
+            "problemas": problemas,
         }
 
     @abstractmethod

@@ -26,6 +26,24 @@ log = get_logger()
 _OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
 
 
+def _clave_duplicado(enc: dict) -> str:
+    """
+    Clave robusta para detectar documentos duplicados.
+
+    Prioriza el NCF (identificador fiscal ÚNICO del comprobante): dos PDFs con
+    el mismo NCF son el mismo documento aunque cambie el nombre del archivo o
+    la ruta. Si el NCF no se pudo extraer, cae a número+fecha; y si tampoco
+    hay número, usa el NCF vacío + fecha para no colapsar documentos distintos.
+    """
+    ncf = (enc.get("ncf") or "").strip().upper()
+    if ncf:
+        return f"NCF:{ncf}"
+    num = str(enc.get("numero_documento") or "").strip()
+    fecha = enc.get("fecha_documento")
+    fecha_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha or "")
+    return f"NUM:{num}|{fecha_str}"
+
+
 @dataclass
 class ProcessResult:
     """Resultado completo de un lote de procesamiento."""
@@ -35,6 +53,10 @@ class ProcessResult:
     fallidos: int = 0
     advertencias: list[str] = field(default_factory=list)
     errores: list[str] = field(default_factory=list)
+    # Reporte detallado por documento (para la pantalla de resultados):
+    #   {archivo, ncf, tipo, estado, lineas, problemas: [(sev, msg), …]}
+    #   estado ∈ {"ok", "advertencia", "error", "omitido", "reemplazado"}
+    documentos: list[dict] = field(default_factory=list)
     excel_path: Optional[Path] = None
     output_dir: Optional[Path] = None
 
@@ -111,42 +133,63 @@ def _process(
     for i, pdf_path in enumerate(pdfs, 1):
         on_progress(i - 1, result.total, f"Leyendo {pdf_path.name}…")
 
+        info = {
+            "archivo": pdf_path.name, "ncf": None, "tipo": None,
+            "estado": "ok", "lineas": 0, "problemas": [],
+        }
+        result.documentos.append(info)
+
         ok, err = validate_pdf(pdf_path)
         if not ok:
-            msg = f"{pdf_path.name}: {err}"
-            result.errores.append(msg)
+            info["estado"] = "fallido"
+            info["problemas"].append(("error", err))
+            result.errores.append(f"{pdf_path.name}: {err}")
             result.fallidos += 1
-            log.error(msg)
+            log.error(f"{pdf_path.name}: {err}")
             continue
 
         try:
-            doc = processor.procesar_pdf(
-                pdf_path,
-                on_warning=lambda w: result.advertencias.append(w),
-            )
-            # Advertir si el tipo detectado en el PDF no coincide con el
-            # tipo elegido por el usuario (solo para tipos con plantilla real).
-            detectado = doc["encabezado"].get("tipo_documento")
+            doc = processor.procesar_pdf(pdf_path)   # los problemas vienen en doc
+            enc = doc["encabezado"]
+            info["ncf"]     = enc.get("ncf")
+            info["tipo"]    = enc.get("tipo_documento")
+            info["lineas"]  = len(doc["detalle"])
+            info["problemas"] = list(doc.get("problemas", []))
+
+            # Advertir si el tipo detectado no coincide con el elegido.
+            detectado = enc.get("tipo_documento")
             if (
                 type_id in PLANTILLAS
                 and detectado in PLANTILLAS
                 and detectado != type_id
             ):
-                result.advertencias.append(
-                    f"{pdf_path.name}: parece un '{detectado}' pero se está "
-                    f"procesando como '{type_id}'. Se usará la plantilla de "
-                    f"'{type_id}'; verifica el tipo seleccionado."
-                )
+                info["problemas"].append((
+                    "advertencia",
+                    f"Detectado como '{detectado}' pero se procesa como '{type_id}'",
+                ))
                 log.warning(
                     f"Tipo no coincide en {pdf_path.name}: "
                     f"detectado={detectado}, seleccionado={type_id}"
                 )
+
+            # Estado global del documento según la severidad de sus problemas
+            if any(sev == "error" for sev, _ in info["problemas"]):
+                info["estado"] = "error"
+            elif info["problemas"]:
+                info["estado"] = "advertencia"
+
+            # Volcar problemas al listado plano (log de la pantalla de proceso)
+            for sev, msg in info["problemas"]:
+                result.advertencias.append(f"{pdf_path.name}: {msg}")
+
+            doc["_info"] = info
             documentos_ok.append(doc)
         except Exception as exc:
-            msg = f"{pdf_path.name}: {exc}"
-            result.errores.append(msg)
+            info["estado"] = "fallido"
+            info["problemas"].append(("error", str(exc)))
+            result.errores.append(f"{pdf_path.name}: {exc}")
             result.fallidos += 1
-            log.error(msg, exc_info=True)
+            log.error(f"{pdf_path.name}: {exc}", exc_info=True)
 
     if not documentos_ok:
         raise ValueError(
@@ -170,18 +213,31 @@ def _process(
         num  = str(enc.get("numero_documento") or "")
         fecha = enc.get("fecha_documento")
         fecha_str = fecha.strftime("%Y-%m-%d") if hasattr(fecha, "strftime") else str(fecha or "")
-        clave = f"{num}|{fecha_str}"
+        clave = _clave_duplicado(enc)   # por NCF (robusto), con respaldo num|fecha
         nombre = doc["ruta_pdf"].name
 
         if clave in por_clave:
-            sobreescribir = on_duplicate(nombre, num, fecha_str)
+            # Mostrar el NCF en el diálogo cuando exista (más informativo)
+            ident = (enc.get("ncf") or num or "").strip()
+            sobreescribir = on_duplicate(nombre, ident, fecha_str)
             if sobreescribir:
                 # Reemplazar la entrada anterior del lote por esta (no
                 # duplicar filas: cada proceso genera un Excel nuevo).
+                doc_previo = documentos_finales[por_clave[clave]]
+                if doc_previo.get("_info"):
+                    doc_previo["_info"]["estado"] = "reemplazado"
+                    doc_previo["_info"]["problemas"].append(
+                        ("advertencia", f"Duplicado (NCF {ident}): reemplazado por {nombre}")
+                    )
                 documentos_finales[por_clave[clave]] = doc
                 log.info(f"Sobreescribiendo duplicado del lote: {nombre}")
             else:
                 result.omitidos += 1
+                if doc.get("_info"):
+                    doc["_info"]["estado"] = "omitido"
+                    doc["_info"]["problemas"].append(
+                        ("advertencia", f"Duplicado (NCF {ident}): omitido")
+                    )
                 log.info(f"Duplicado omitido: {nombre}")
         else:
             por_clave[clave] = len(documentos_finales)

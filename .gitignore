@@ -1,0 +1,17 @@
+# Artefactos de Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Salida de PyInstaller
+build/
+dist/
+
+# Archivos generados en tiempo de ejecución
+outputs/
+logs/
+
+# Configuración local de herramientas
+.claude/
