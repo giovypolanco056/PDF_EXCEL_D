@@ -40,6 +40,13 @@ app/
 
 ## Instalación
 
+### Opción fácil (Windows)
+
+1. Doble clic en **`Instalar.bat`** → descarga e instala todas las dependencias.
+2. Doble clic en **`Ejecutar.bat`** → abre la aplicación.
+
+### Opción manual
+
 ```bash
 # 1. Crear entorno virtual (recomendado)
 python -m venv venv
