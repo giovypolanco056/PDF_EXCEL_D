@@ -146,6 +146,7 @@ class FileListBox(tk.Frame):
             selectbackground=T.ACCENT,
             selectforeground=T.TEXT_ON_DARK,
             activestyle="none",
+            selectmode="extended",   # permite elegir uno o varios para quitar
             relief="flat",
             bd=0,
             highlightthickness=0,
@@ -166,3 +167,20 @@ class FileListBox(tk.Frame):
 
     def count(self) -> int:
         return self._listbox.size()
+
+    def selected_indices(self) -> list[int]:
+        """Índices actualmente seleccionados en la lista."""
+        return list(self._listbox.curselection())
+
+    def bind_remove_key(self, callback):
+        """Ejecuta callback al pulsar Supr/Delete o Retroceso sobre la lista."""
+        self._listbox.bind("<Delete>", lambda e: callback())
+        self._listbox.bind("<BackSpace>", lambda e: callback())
+
+    def bind_double_click(self, callback):
+        """Ejecuta callback(index) al hacer doble clic en un elemento."""
+        def _handler(event):
+            idx = self._listbox.nearest(event.y)
+            if idx >= 0:
+                callback(idx)
+        self._listbox.bind("<Double-Button-1>", _handler)

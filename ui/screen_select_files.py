@@ -38,12 +38,17 @@ class ScreenSelectFiles(tk.Frame):
         self._on_back = on_back
         self._on_process = on_process
         self._on_change = on_change
-        self._pdf_paths: list[str] = list(initial_paths or [])
+        # _pdf_paths guarda SIEMPRE archivos PDF individuales ya resueltos
+        # (las carpetas se expanden al agregarlas), para poder quitar cualquiera.
+        self._pdf_paths: list[str] = []
+        # _resolved: rutas Path mostradas en la lista, en el MISMO orden que la
+        # lista visible; el índice de la lista mapea 1:1 con esta.
+        self._resolved: list[Path] = []
         self._build()
         self._enable_drag_and_drop()
-        # Mostrar la selección recordada al volver a esta pantalla
-        if self._pdf_paths:
-            self._refresh_list()
+        # Normalizar la selección recordada al volver a esta pantalla
+        if initial_paths:
+            self._add_paths(list(initial_paths), notify=False)
 
     def _build(self):
         doc_type = get_type(self._type_id)
@@ -112,6 +117,15 @@ class ScreenSelectFiles(tk.Frame):
             bg=T.BG,
         ).pack(side="right")
 
+        self._btn_remove = GhostButton(
+            selection_row,
+            text="🗑  Quitar seleccionado",
+            command=self._remove_selected,
+            bg=T.BG,
+            state="disabled",
+        )
+        self._btn_remove.pack(side="right", padx=(0, T.PAD_SM))
+
         # Área de lista
         list_frame = tk.Frame(body, bg=T.SURFACE, pady=0)
         list_frame.pack(fill="both", expand=True)
@@ -134,6 +148,9 @@ class ScreenSelectFiles(tk.Frame):
 
         self._file_list = FileListBox(list_frame)
         self._file_list.pack(fill="both", expand=True, padx=T.PAD_SM, pady=T.PAD_SM)
+        # Quitar archivos: tecla Supr/Retroceso o doble clic sobre un elemento
+        self._file_list.bind_remove_key(self._remove_selected)
+        self._file_list.bind_double_click(self._remove_index)
 
         self._list_frame = list_frame   # objetivo del drag-and-drop
 
@@ -185,12 +202,38 @@ class ScreenSelectFiles(tk.Frame):
         if folder:
             self._add_paths([folder])
 
-    def _add_paths(self, new_paths: list[str]):
+    def _add_paths(self, new_paths: list[str], notify: bool = True):
+        """Agrega archivos y/o carpetas. Las carpetas se EXPANDEN a los PDF
+        individuales que contienen, de modo que cada archivo pueda quitarse
+        por separado después."""
+        from utils.files import collect_pdfs
         existing = set(self._pdf_paths)
-        for p in new_paths:
-            if p not in existing:
-                self._pdf_paths.append(p)
-                existing.add(p)
+        for f in collect_pdfs(new_paths):        # ← expande carpetas y resuelve
+            s = str(f)
+            if s not in existing:
+                self._pdf_paths.append(s)
+                existing.add(s)
+        self._refresh_list()
+        if notify:
+            self._notify_change()
+
+    def _remove_selected(self):
+        """Quita de la lista los archivos actualmente seleccionados."""
+        indices = self._file_list.selected_indices()
+        self._remove_indices(indices)
+
+    def _remove_index(self, index: int):
+        """Quita un único archivo por su índice (usado por el doble clic)."""
+        self._remove_indices([index])
+
+    def _remove_indices(self, indices: list[int]):
+        if not indices:
+            return
+        # Mapear los índices visibles a las rutas resueltas y quitarlas.
+        a_quitar = {str(self._resolved[i]) for i in indices if 0 <= i < len(self._resolved)}
+        if not a_quitar:
+            return
+        self._pdf_paths = [p for p in self._pdf_paths if p not in a_quitar]
         self._refresh_list()
         self._notify_change()
 
@@ -233,6 +276,7 @@ class ScreenSelectFiles(tk.Frame):
     def _refresh_list(self):
         from utils.files import collect_pdfs
         pdfs = collect_pdfs(self._pdf_paths)
+        self._resolved = pdfs                 # orden idéntico al de la lista visible
         names = [p.name for p in pdfs]
 
         if names:
@@ -241,8 +285,10 @@ class ScreenSelectFiles(tk.Frame):
             n = len(names)
             self._badge_count.set(f"{n} archivo{'s' if n != 1 else ''}", "info")
             self._btn_process.config(state="normal")
+            self._btn_remove.config(state="normal")
             self._lbl_hint.config(
-                text=f"{n} PDF{'s' if n != 1 else ''} listo{'s' if n != 1 else ''} para procesar",
+                text=f"{n} PDF{'s' if n != 1 else ''} listo{'s' if n != 1 else ''} "
+                     f"· doble clic o Supr para quitar",
                 fg=T.SUCCESS,
             )
         else:
@@ -250,6 +296,7 @@ class ScreenSelectFiles(tk.Frame):
             self._lbl_empty.place(relx=0.5, rely=0.5, anchor="center")
             self._badge_count.set("0 archivos", "neutral")
             self._btn_process.config(state="disabled")
+            self._btn_remove.config(state="disabled")
             self._lbl_hint.config(
                 text="Selecciona al menos un PDF para continuar",
                 fg=T.TEXT_DISABLED,
