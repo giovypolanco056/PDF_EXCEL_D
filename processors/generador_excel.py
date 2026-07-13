@@ -21,9 +21,15 @@ Fila 2 – encabezados para filas D (detalle de ítem)
 from datetime import datetime
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+# Reglas de negocio / constantes fijas del portal, centralizadas.
+try:
+    from processors import constantes
+except ImportError:  # ejecución directa: python processors/generador_excel.py
+    import constantes
 
 # ── Estilos ───────────────────────────────────────────────────────────────────
 # Encabezados en gris (antes rojo). GRIS_HDR = gris medio para las columnas
@@ -53,12 +59,6 @@ def _es_columna_monetaria(encabezado) -> bool:
         return False
     h = str(encabezado).lower()
     return any(p in h for p in _PALABRAS_MONETARIAS)
-
-# Fecha de expiración del NCF (autorización e-CF de la DGII). Es un valor
-# FIJO que no aparece en el PDF; el portal EGEHID lo exige en la columna
-# "Fecha Expiracion NCF" de las plantillas de Factura y Nota de Débito.
-# Actualízalo cuando la DGII renueve la vigencia de la secuencia.
-FECHA_EXPIRACION_NCF = datetime(2027, 12, 31)
 
 
 def _a_entero(valor):
@@ -321,50 +321,6 @@ def _resolver_plantilla(tipo_documento: str | None):
     return cols, claves, d_map
 
 
-# ── Lectura de duplicados existentes ─────────────────────────────────────────
-def obtener_documentos_existentes(ruta_excel: str) -> set:
-    """Devuelve claves 'numero_documento|fecha' ya guardadas en el Excel.
-    Funciona para cualquiera de las 3 plantillas, porque "tipo_linea",
-    "numero_documento" y "fecha_documento" están siempre en las primeras
-    columnas (la posición exacta se resuelve leyendo la fila 1 del Excel
-    existente, no asumiendo una plantilla fija)."""
-    ruta = Path(ruta_excel)
-    if not ruta.exists() or ruta.suffix.lower() != ".xlsx":
-        return set()
-    try:
-        wb = load_workbook(ruta, data_only=True)
-    except Exception:
-        return set()
-    if NOMBRE_HOJA not in wb.sheetnames:
-        return set()
-
-    hoja = wb[NOMBRE_HOJA]
-
-    # Detectar qué plantilla tiene el Excel existente comparando el
-    # número de columnas con encabezado en la fila 1.
-    ultima_col = hoja.max_column
-    cols, claves, _ = _resolver_plantilla(None)
-    for nombre_tipo, (plantilla, _dmap) in PLANTILLAS.items():
-        if len(plantilla) == ultima_col:
-            cols, claves = plantilla, [c[1] for c in plantilla]
-            break
-
-    idx_tipo  = claves.index("tipo_linea") + 1
-    idx_num   = claves.index("numero_documento") + 1
-    idx_fecha = claves.index("fecha_documento") + 1
-
-    claves_existentes = set()
-    for fila in hoja.iter_rows(min_row=3, values_only=True):
-        if len(fila) < idx_tipo or fila[idx_tipo - 1] != "E":
-            continue
-        num   = fila[idx_num - 1]   if len(fila) >= idx_num   else None
-        fecha = fila[idx_fecha - 1] if len(fila) >= idx_fecha else None
-        if num is not None:
-            fs = fecha.strftime("%Y-%m-%d") if isinstance(fecha, datetime) else str(fecha or "")
-            claves_existentes.add(f"{num}|{fs}")
-    return claves_existentes
-
-
 # ── Construcción de filas ─────────────────────────────────────────────────────
 def _construir_filas(documentos: list, claves: list, d_map: dict, tipo: str) -> list:
     """
@@ -397,8 +353,8 @@ def _construir_filas(documentos: list, claves: list, d_map: dict, tipo: str) -> 
         e["ncf"]                  = enc.get("ncf")
         e["fecha_documento"]      = enc.get("fecha_documento")
         e["numero_documento"]     = _a_entero(enc.get("numero_documento"))
-        e["ind_ingreso"]          = 1      # Tipo de Ingresos — regla de negocio
-        e["tipo_pago"]            = 2      # Tipo de Pago — regla de negocio
+        e["ind_ingreso"]          = constantes.IND_INGRESO   # "Tipo de Ingresos"
+        e["tipo_pago"]            = constantes.TIPO_PAGO      # "Tipo de Pago"
         e["fecha_vencimiento"]    = enc.get("fecha_vencimiento")
         e["moneda"]               = enc.get("moneda")
         e["tasa_cambio"]          = None
@@ -411,14 +367,14 @@ def _construir_filas(documentos: list, claves: list, d_map: dict, tipo: str) -> 
         # Fecha Expiración NCF: valor fijo, solo existe la columna en las
         # plantillas de Factura y Nota de Débito (no en Nota de Crédito).
         if "fecha_expiracion_ncf" in e:
-            e["fecha_expiracion_ncf"] = FECHA_EXPIRACION_NCF
+            e["fecha_expiracion_ncf"] = constantes.FECHA_EXPIRACION_NCF
         # Código de Modificación: aplica únicamente a notas (crédito/débito),
         # que modifican otro comprobante. Las facturas lo dejan vacío.
         if "cod_modificacion" in e and es_nota:
-            e["cod_modificacion"] = 3
+            e["cod_modificacion"] = constantes.COD_MODIFICACION_NOTA
         # Campos exclusivos de ND y Factura (None en NC por no existir la clave)
         if "termino_pago" in e:
-            e["termino_pago"] = 0          # Término de Pago — regla de negocio
+            e["termino_pago"] = constantes.TERMINO_PAGO   # "Termino de Pago"
         if "razon_modificacion" in e:
             e["razon_modificacion"] = None
         e["_tipo"] = "E"
@@ -443,8 +399,8 @@ def _construir_filas(documentos: list, claves: list, d_map: dict, tipo: str) -> 
             semanticos = {
                 "d_nombre_item":       linea.get("nombre"),
                 "d_desc_item":         linea.get("descripcion"),  # None si no hay
-                "d_ind_bien_servicio": 2,                         # regla de negocio
-                "d_ind_tasa_itbis":    4,                         # regla de negocio
+                "d_ind_bien_servicio": constantes.D_IND_BIEN_SERVICIO,
+                "d_ind_tasa_itbis":    constantes.D_IND_TASA_ITBIS,
                 "d_cantidad":          linea.get("cantidad"),     # del PDF (o 1.0)
                 "d_precio_unitario":   precio_unitario,           # monto / cantidad
                 # Unidad de Medida se deja vacía a propósito: la plantilla
@@ -502,15 +458,11 @@ def _ultima_fila_con_datos(hoja) -> int:
     return ultima
 
 
-def _escribir_hoja(wb: Workbook, filas: list, cols: list, hoja_existente: bool = False):
-    if NOMBRE_HOJA in wb.sheetnames:
-        hoja = wb[NOMBRE_HOJA]
-    else:
-        hoja = wb.active
-        hoja.title = NOMBRE_HOJA
+def _escribir_hoja(wb: Workbook, filas: list, cols: list):
+    hoja = wb.active
+    hoja.title = NOMBRE_HOJA
 
-    if not hoja_existente:
-        _escribir_encabezados(hoja, cols)
+    _escribir_encabezados(hoja, cols)
 
     alin_izq  = Alignment(vertical="center",  wrap_text=False)
     alin_nota = Alignment(vertical="top",     wrap_text=False)
@@ -546,60 +498,20 @@ def _escribir_hoja(wb: Workbook, filas: list, cols: list, hoja_existente: bool =
     hoja.freeze_panes = "A3"
 
 
-# ── Sobreescritura de duplicados ──────────────────────────────────────────────
-def eliminar_filas_documento(hoja, claves: list, numero_documento: str, fecha_documento) -> None:
-    """Elimina las filas E y D de un documento ya existente.
-    Tolera filas en blanco dentro del bloque para no cortar la búsqueda."""
-    idx_tipo  = claves.index("tipo_linea") + 1
-    idx_num   = claves.index("numero_documento") + 1
-    idx_fecha = claves.index("fecha_documento") + 1
-    idx_ncf   = claves.index("ncf") + 1
-
-    fecha_cmp = fecha_documento if isinstance(fecha_documento, datetime) else None
-
-    filas_a_eliminar = []
-    ncf_objetivo = None
-    dentro_bloque = False
-
-    for fila in hoja.iter_rows(min_row=3):
-        tipo = fila[idx_tipo - 1].value
-        num  = fila[idx_num - 1].value
-
-        if tipo == "E":
-            fecha = fila[idx_fecha - 1].value
-            fecha_ok = (
-                (fecha_cmp is not None and isinstance(fecha, datetime) and fecha.date() == fecha_cmp.date())
-                or (fecha_cmp is None and fecha is None)
-            )
-            if str(num) == str(numero_documento) and fecha_ok:
-                ncf_objetivo  = fila[idx_ncf - 1].value
-                dentro_bloque = True
-                filas_a_eliminar.append(fila[0].row)
-            elif dentro_bloque:
-                break
-
-        elif tipo == "D" and dentro_bloque:
-            ncf_fila = fila[idx_ncf - 1].value
-            if ncf_fila == ncf_objetivo:
-                filas_a_eliminar.append(fila[0].row)
-
-        elif tipo is None and dentro_bloque:
-            filas_a_eliminar.append(fila[0].row)
-
-    for num_fila in sorted(filas_a_eliminar, reverse=True):
-        hoja.delete_rows(num_fila)
-
-
 # ── Punto de entrada público ──────────────────────────────────────────────────
 def generar_excel(documentos: list, ruta_salida: str, tipo_documento: str | None = None):
     """
-    Genera (o actualiza) el Excel de salida usando la plantilla correcta
-    según `tipo_documento`: "factura" | "nota_credito" | "nota_debito".
+    Genera el Excel de salida usando la plantilla correcta según
+    `tipo_documento`: "factura" | "nota_credito" | "nota_debito".
 
-    Si `tipo_documento` es None, se intenta inferir del primer documento
-    de la lista (campo encabezado["tipo_documento"]); si tampoco está
-    disponible, se usa la plantilla de Nota de Crédito por compatibilidad
-    con versiones anteriores del proyecto.
+    Cada llamada crea un libro NUEVO. El motor (processors/engine.py) usa un
+    nombre de archivo con timestamp por corrida y deduplica en memoria por NCF
+    antes de llegar aquí, así que este generador nunca abre ni acumula sobre un
+    Excel previo.
+
+    Si `tipo_documento` es None, se intenta inferir del primer documento de la
+    lista (campo encabezado["tipo_documento"]); si tampoco está disponible, se
+    usa la plantilla de Nota de Crédito por compatibilidad.
     """
     if tipo_documento is None and documentos:
         tipo_documento = documentos[0]["encabezado"].get("tipo_documento")
@@ -607,31 +519,11 @@ def generar_excel(documentos: list, ruta_salida: str, tipo_documento: str | None
     cols, claves, d_map = _resolver_plantilla(tipo_documento)
     tipo_efectivo = tipo_documento if tipo_documento in PLANTILLAS else TIPO_POR_DEFECTO
 
-    ruta = Path(ruta_salida)
-    hoja_existente = False
-
-    if ruta.exists() and ruta.suffix.lower() == ".xlsx":
-        try:
-            wb = load_workbook(ruta)
-            hoja_existente = True
-        except Exception:
-            wb = Workbook()
-    else:
-        wb = Workbook()
-
-    if hoja_existente and NOMBRE_HOJA in wb.sheetnames:
-        hoja = wb[NOMBRE_HOJA]
-        for doc in documentos:
-            if doc.get("_sobreescribir"):
-                enc = doc["encabezado"]
-                eliminar_filas_documento(
-                    hoja, claves,
-                    numero_documento=enc.get("numero_documento"),
-                    fecha_documento=enc.get("fecha_documento"),
-                )
-
+    wb = Workbook()
     filas = _construir_filas(documentos, claves, d_map, tipo_efectivo)
-    _escribir_hoja(wb, filas, cols, hoja_existente=hoja_existente)
+    _escribir_hoja(wb, filas, cols)
+
+    ruta = Path(ruta_salida)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(ruta))
 

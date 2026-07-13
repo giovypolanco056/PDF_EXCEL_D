@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Optional
 import os
 
+from utils.logger import get_logger
+
+log = get_logger()
+
 
 def _es_pdf_por_contenido(path: Path) -> bool:
     """True si el archivo empieza con la firma %PDF-, sin importar su
@@ -92,4 +96,6 @@ def open_path(path: Path) -> None:
         else:
             subprocess.Popen(["xdg-open", str(path)])
     except Exception:
-        pass
+        # No romper la UI si el SO no puede abrir la ruta, pero dejar rastro:
+        # sin esto, el usuario hace clic y "no pasa nada" sin explicación.
+        log.warning("No se pudo abrir la ruta %s", path, exc_info=True)

@@ -13,6 +13,9 @@ from typing import Optional
 
 from processors.engine import ProcessResult
 from ui import theme as T
+from utils.logger import get_logger
+
+log = get_logger()
 
 # Soporte de arrastrar-y-soltar archivos (opcional). Si tkinterdnd2 no está
 # instalado, la app funciona igual pero sin drag-and-drop.
@@ -46,7 +49,9 @@ class App(_BaseTk):
             try:
                 self.iconbitmap(str(icon_path))
             except Exception:
-                pass
+                # El ícono es cosmético; si falla no se interrumpe la app,
+                # pero se registra para poder diagnosticarlo.
+                log.warning("No se pudo aplicar el ícono %s", icon_path, exc_info=True)
 
         # Centrar en pantalla
         self.update_idletasks()

@@ -25,6 +25,12 @@ import re
 from datetime import datetime
 from typing import Optional
 
+# Reglas de negocio / constantes fijas del portal, centralizadas.
+try:
+    from processors import constantes
+except ImportError:  # ejecución directa: python processors/extractor_encabezado.py
+    import constantes
+
 
 # ---------------------------------------------------------------------------
 # Patrones de extracción
@@ -45,7 +51,22 @@ PATRONES = {
         r"\s*:\s*(\d+)"
     ),
     "fecha_vencimiento": r"Fecha\s+Vcto\.\s+Factura\s*:\s*([\d.]+)",
-    "total": r"Total\s+en\s+(?:RD\$|USD|DOP)\s+([\d,]+\.\d{2})",
+    "total": r"Total\s+en\s+(?:RD\$|USD|DOP|EUR)\s+([\d,]+\.\d{2})",
+}
+
+# Moneda del documento: se ANCLA al rótulo del total ("Total en RD$ …",
+# "Total en USD …"), NO al texto completo. Buscar "USD"/"dólares" en todo el
+# texto marcaba como USD una factura en pesos si esas palabras aparecían, por
+# ejemplo, en las observaciones. Mantener el grupo de moneda en sincronía con
+# el regex de "total" de PATRONES (arriba).
+MONEDA_TOTAL = r"Total\s+en\s+(RD\$|DOP|USD|EUR)\b"
+
+# Normaliza el token del rótulo al código de moneda del portal.
+_MONEDA_NORMALIZADA = {
+    "RD$": "DOP",
+    "DOP": "DOP",
+    "USD": "USD",
+    "EUR": "EUR",
 }
 
 
@@ -86,7 +107,20 @@ NOMBRES_TIPO = {
 }
 
 
-INDICADOR_BIEN_SERVICIO = 1
+def detectar_moneda(texto: str) -> str:
+    """
+    Determina la moneda del documento a partir del rótulo del TOTAL.
+
+    Anclarla al total (y no al texto completo) evita falsos positivos: si
+    "dólares" o "USD" aparece en las observaciones de una factura en pesos,
+    la moneda NO debe cambiar. Si no se encuentra el rótulo del total, se
+    asume DOP (peso dominicano), la moneda por defecto del portal EGEHID.
+    """
+    coincidencia = re.search(MONEDA_TOTAL, texto, re.IGNORECASE)
+    if coincidencia:
+        token = coincidencia.group(1).upper()
+        return _MONEDA_NORMALIZADA.get(token, "DOP")
+    return "DOP"
 
 
 def _convertir_fecha(valor: Optional[str]) -> Optional[datetime]:
@@ -223,17 +257,13 @@ def extraer_encabezado(texto: str) -> dict:
     encabezado["fecha_ncf_modificado"] = _convertir_fecha(encabezado.get("fecha_ncf_modificado"))
     encabezado["total"] = _convertir_monto(encabezado["total"])
 
-    # Detectar moneda: USD si el texto lo menciona, DOP/RD$ en caso contrario
-    if re.search(r'\bUSD\b|d[oó]lares?', texto, re.IGNORECASE):
-        encabezado["moneda"] = "USD"
-    elif re.search(r'\bEUR\b|euros?', texto, re.IGNORECASE):
-        encabezado["moneda"] = "EUR"
-    else:
-        encabezado["moneda"] = "DOP"
+    # Moneda anclada al rótulo del total (ver detectar_moneda), no al texto
+    # completo, para no confundir menciones sueltas de "USD"/"dólares".
+    encabezado["moneda"] = detectar_moneda(texto)
 
     # Campos calculados
     encabezado["tipo_documento"] = detectar_tipo_documento(texto, encabezado.get("ncf"))
-    encabezado["indicador_bien_servicio"] = INDICADOR_BIEN_SERVICIO
+    encabezado["indicador_bien_servicio"] = constantes.INDICADOR_BIEN_SERVICIO
     encabezado["observaciones"] = extraer_observaciones(texto)
 
     return encabezado
