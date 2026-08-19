@@ -59,6 +59,18 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Pruebas
+
+La batería de pruebas cubre extractores, generador de Excel, diagnóstico,
+detección de duplicados, utilidades de archivos y una prueba de integración
+de extremo a extremo con PDFs reales (se salta sola si no están en el equipo).
+
+```bash
+python run_tests.py
+```
+
+En Windows también puedes hacer doble clic en **`Pruebas.bat`**.
+
 ## Generar ejecutable para Windows
 
 ```bash
