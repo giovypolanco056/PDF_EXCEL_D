@@ -77,6 +77,17 @@ def _a_entero(valor):
     return valor
 
 
+def _rnc_a_entero(valor):
+    """Como _a_entero, pero primero quita guiones y espacios del RNC/cédula
+    (p. ej. '130-12345-6' → 13012345 6 → 130123456). El portal espera el RNC
+    como número, sin separadores."""
+    if isinstance(valor, str):
+        limpio = valor.replace("-", "").replace(" ", "").strip()
+        if limpio.isdigit() and (limpio == "0" or not limpio.startswith("0")):
+            return int(limpio)
+    return valor
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # DEFINICIÓN DE LAS 3 PLANTILLAS
 # ════════════════════════════════════════════════════════════════════════════
@@ -363,7 +374,7 @@ def _construir_filas(documentos: list, claves: list, d_map: dict, tipo: str) -> 
         e["fecha_vencimiento"]    = enc.get("fecha_vencimiento")
         e["moneda"]               = enc.get("moneda")
         e["tasa_cambio"]          = None
-        e["rnc_cliente"]          = _a_entero(enc.get("rnc_cliente"))
+        e["rnc_cliente"]          = _rnc_a_entero(enc.get("rnc_cliente"))
         e["cliente"]              = enc.get("cliente")
         e["ncf_modificado"]       = enc.get("ncf_modificado")
         e["rnc_otro"]             = None

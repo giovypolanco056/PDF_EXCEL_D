@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from processors.generador_excel import (
     _es_columna_monetaria,
     _a_entero,
+    _rnc_a_entero,
     _resolver_plantilla,
     generar_excel,
     FORMATO_NUM,
@@ -77,6 +78,20 @@ class TestAEntero(unittest.TestCase):
         self.assertEqual(_a_entero("A1B2"), "A1B2")
         self.assertEqual(_a_entero(None), None)
         self.assertEqual(_a_entero(55), 55)
+
+
+class TestRncAEntero(unittest.TestCase):
+    def test_quita_guiones_y_espacios(self):
+        # Bug: el RNC con guiones quedaba como texto; el portal espera número.
+        self.assertEqual(_rnc_a_entero("130-12345-6"), 130123456)
+        self.assertEqual(_rnc_a_entero("1 30 12345 6"), 130123456)
+
+    def test_sin_separadores(self):
+        self.assertEqual(_rnc_a_entero("101023122"), 101023122)
+
+    def test_no_numerico_intacto(self):
+        self.assertEqual(_rnc_a_entero(None), None)
+        self.assertEqual(_rnc_a_entero("N/A"), "N/A")
 
 
 class TestResolverPlantilla(unittest.TestCase):

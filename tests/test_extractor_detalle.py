@@ -5,7 +5,7 @@ import unittest
 
 from _helpers import W, tabla_sintetica  # noqa: E402  (inserta sys.path)
 from processors.extractor_detalle import (
-    _PAT_MONTO,
+    _es_monto,
     _convertir_monto,
     _parsear_descripcion,
     _agrupar_por_linea,
@@ -13,19 +13,25 @@ from processors.extractor_detalle import (
 )
 
 
-class TestPatronMonto(unittest.TestCase):
+class TestEsMonto(unittest.TestCase):
     def test_acepta_formatos_validos(self):
-        for s in ["1708.18", "22,789,532.00", "-5,124.53", "1,708.1835", "0.00", "1.5"]:
-            self.assertIsNotNone(_PAT_MONTO.match(s), f"debería aceptar {s!r}")
+        for s in ["1708.18", "22,789,532.00", "-5,124.53", "1,708.1835",
+                  "0.00", "1.5", "4,774,623", "(5,124.53)"]:
+            self.assertTrue(_es_monto(s), f"debería aceptar {s!r}")
 
     def test_conserva_mas_de_dos_decimales(self):
         # El bug corregido: antes \d{1,2} rechazaba esto.
-        self.assertIsNotNone(_PAT_MONTO.match("1,708.1835"))
-        self.assertIsNotNone(_PAT_MONTO.match("2.44105"))
+        self.assertTrue(_es_monto("1,708.1835"))
+        self.assertTrue(_es_monto("2.44105"))
 
-    def test_rechaza_no_montos(self):
-        for s in ["2025", "abc", "1,234", "", "kWh", ".", "12."]:
-            self.assertIsNone(_PAT_MONTO.match(s), f"NO debería aceptar {s!r}")
+    def test_entero_con_separador_de_miles_es_monto(self):
+        # Bug: '4,774,623' (sin decimales) antes se descartaba.
+        self.assertTrue(_es_monto("4,774,623"))
+
+    def test_rechaza_anios_y_enteros_pelados(self):
+        # Un año o un entero sin separador ni decimales NO es monto.
+        for s in ["2025", "2026", "1", "4774623", "abc", "", "kWh", ".", "12."]:
+            self.assertFalse(_es_monto(s), f"NO debería aceptar {s!r}")
 
 
 class TestConvertirMonto(unittest.TestCase):
@@ -33,6 +39,13 @@ class TestConvertirMonto(unittest.TestCase):
         self.assertEqual(_convertir_monto("131,453.24"), 131453.24)
         self.assertEqual(_convertir_monto("-5,124.53"), -5124.53)
         self.assertEqual(_convertir_monto("1,708.1835"), 1708.1835)
+
+    def test_entero_con_separador(self):
+        self.assertEqual(_convertir_monto("4,774,623"), 4774623.0)
+
+    def test_negativo_contable(self):
+        # "(5,124.53)" (paréntesis) = negativo.
+        self.assertEqual(_convertir_monto("(5,124.53)"), -5124.53)
 
     def test_invalido_devuelve_none(self):
         self.assertIsNone(_convertir_monto("abc"))
@@ -118,6 +131,30 @@ class TestExtraerDetalle(unittest.TestCase):
         palabras = tabla_sintetica([("ENERGIA 1 kWh", "4,774,623.00")])
         det = extraer_detalle(palabras, numero_documento="600004598")
         self.assertEqual(det[0]["numero_documento"], "600004598")
+
+    def test_concepto_con_palabra_total_no_corta_la_tabla(self):
+        # Regresión (bug crítico): un concepto que contenga "Total" en medio
+        # NO debe terminar la tabla y perder las líneas siguientes.
+        palabras = tabla_sintetica([
+            ("ENERGIA 1 kWh", "4,774,623.00"),
+            ("AJUSTE Total ENERGIA", "1,000,000.00"),
+            ("POTENCIA 1 kW", "22,789,532.00"),
+        ])
+        det = extraer_detalle(palabras)
+        self.assertEqual(len(det), 3)
+        self.assertEqual(sum(d["monto"] for d in det), 28564155.00)
+
+    def test_monto_entero_con_separador(self):
+        # Regresión: '4,774,623' (sin decimales) debe extraerse.
+        palabras = tabla_sintetica([("ENERGIA 1 kWh", "4,774,623")])
+        det = extraer_detalle(palabras)
+        self.assertEqual(det[0]["monto"], 4774623.0)
+
+    def test_monto_negativo_contable(self):
+        # Regresión: '(5,124.53)' (paréntesis) = -5124.53
+        palabras = tabla_sintetica([("DEVOLUCION SERVICIO", "(5,124.53)")])
+        det = extraer_detalle(palabras)
+        self.assertEqual(det[0]["monto"], -5124.53)
 
 
 if __name__ == "__main__":

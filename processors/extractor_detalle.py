@@ -56,25 +56,52 @@ _PAT_CANTIDAD_UNIDAD = re.compile(
     r"^(.*?)\s+([\d]+(?:[.,]\d+)?)\s+([A-Za-z]+%?)\s*$"
 )
 
-# Formato de un IMPORTE monetario: dígitos con separador de miles opcional
-# y AL MENOS un decimal (p.ej. "22,789,532.00", "1,708.1835", "-5,124.53").
-# Se usa para localizar el monto por su FORMA, no por su posición X, de modo
-# que la extracción funcione aunque la columna esté en otro lugar.
-#
-# IMPORTANTE: antes se limitaba a 1-2 decimales (\d{1,2}); eso PERDÍA los
-# importes/tarifas con más decimales y volvía impreciso el resultado. Ahora
-# acepta \d+ decimales para conservar toda la precisión del PDF. Un año
-# suelto como "2025"/"2026" NO cumple (no tiene punto decimal) y se ignora.
-_PAT_MONTO = re.compile(r"^-?\d[\d,]*\.\d+$")
+# Forma numérica candidata a IMPORTE: paréntesis/negativo opcional, dígitos
+# con separador de miles opcional y decimales opcionales.
+#   Acepta: "22,789,532.00", "1,708.1835", "-5,124.53", "4,774,623", "(5,124.53)"
+_PAT_NUM = re.compile(r"^\(?-?\d[\d,]*(?:\.\d+)?\)?$")
+
+
+def _es_monto(token: str) -> bool:
+    """
+    True si el token es un IMPORTE monetario (por su FORMA, no su posición X).
+
+    Un número "pelado" sin punto decimal, sin separador de miles y sin
+    paréntesis (p. ej. un año "2025" o una cantidad "1") NO se considera
+    importe: exigir al menos una de esas señales evita capturar años/IDs
+    como si fueran montos.
+    """
+    t = token.strip()
+    if not _PAT_NUM.match(t):
+        return False
+    return ("." in t) or ("," in t) or ("(" in t)
 
 
 def _convertir_monto(valor: str) -> Optional[float]:
-    """Convierte montos con formato '131,453.24' a float."""
-    limpio = valor.strip().replace(",", "")
+    """
+    Convierte un importe a float. Soporta:
+      - separador de miles:      "131,453.24" → 131453.24
+      - más de dos decimales:    "1,708.1835" → 1708.1835
+      - signo negativo:          "-5,124.53"  → -5124.53
+      - negativo contable:       "(5,124.53)" → -5124.53
+    """
+    t = valor.strip()
+    negativo = False
+    if t.startswith("(") and t.endswith(")"):
+        negativo = True
+        t = t[1:-1].strip()
+    t = t.replace(",", "")
     try:
-        return float(limpio)
+        num = float(t)
     except ValueError:
         return None
+    return -num if negativo else num
+
+
+# Fila del GRAN TOTAL que cierra la tabla de detalle: "Total en RD$ …".
+# Sirve para NO cortar la tabla en un concepto que casualmente contenga la
+# palabra "Total" (p. ej. "AJUSTE TOTAL ENERGIA"), lo que perdía líneas.
+_PAT_FIN_TABLA = re.compile(r"^total\s+en\s+(rd\$|rd|dop|usd|eur)\b", re.IGNORECASE)
 
 
 def _es_numero(texto: str) -> bool:
@@ -123,6 +150,28 @@ def _agrupar_por_linea(palabras: list, tolerancia: float = 2.0) -> list:
     return lineas
 
 
+def _top_fin_tabla(palabras: list, top_cabecera: float) -> float:
+    """
+    Coordenada 'top' donde termina la tabla de detalle.
+
+    Preferentemente la fila del GRAN TOTAL ("Total en RD$ …"); si no aparece,
+    como respaldo, la primera fila cuyo PRIMER token (más a la izquierda) sea
+    exactamente "Total". Así un concepto que contenga la palabra "Total" en
+    medio (p. ej. "AJUSTE TOTAL ENERGIA") ya NO corta la tabla.
+    """
+    debajo = [w for w in palabras if w["top"] > top_cabecera + 2]
+    lineas = sorted(_agrupar_por_linea(debajo), key=lambda ln: min(w["top"] for w in ln))
+    respaldo = None
+    for linea in lineas:
+        ordenada = sorted(linea, key=lambda w: w["x0"])
+        texto = " ".join(w["text"] for w in ordenada).strip()
+        if _PAT_FIN_TABLA.match(texto):
+            return min(w["top"] for w in linea)
+        if respaldo is None and ordenada[0]["text"].strip().lower() == "total":
+            respaldo = min(w["top"] for w in linea)
+    return respaldo if respaldo is not None else float("inf")
+
+
 def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> list:
     """
     Recibe la lista de palabras con coordenadas y devuelve una lista de
@@ -146,14 +195,10 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
 
     top_cabecera = palabra_concepto["top"]
 
-    # Fin de la tabla: la primera fila "Total …" posterior a la cabecera.
-    # (Ancla de texto, no de coordenadas: funciona esté donde esté la tabla.)
-    palabra_fin = next(
-        (w for w in palabras
-         if w["text"].strip().lower() == "total" and w["top"] > top_cabecera),
-        None,
-    )
-    top_fin = palabra_fin["top"] if palabra_fin else float("inf")
+    # Fin de la tabla: la fila del GRAN TOTAL ("Total en RD$ …"), no cualquier
+    # palabra "Total" (que podría estar DENTRO de un concepto y cortar la tabla
+    # antes de tiempo, perdiendo líneas de detalle).
+    top_fin = _top_fin_tabla(palabras, top_cabecera)
 
     # Palabras entre la cabecera y el "Total"
     palabras_tabla = [
@@ -174,7 +219,7 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
         # esté el monto, o que los números grandes empiecen más a la izquierda.
         idx_monto = None
         for i in range(len(linea_ord) - 1, -1, -1):
-            if _PAT_MONTO.match(linea_ord[i]["text"].strip()):
+            if _es_monto(linea_ord[i]["text"].strip()):
                 # No confundir una CANTIDAD con unidad (p.ej. "2.44105 MW")
                 # con un importe: si el token siguiente es una unidad de
                 # medida, este número es la cantidad, no el monto.
