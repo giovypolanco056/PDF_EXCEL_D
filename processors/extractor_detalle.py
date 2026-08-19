@@ -46,6 +46,10 @@ import re
 from typing import Optional
 
 
+# Unidades de medida conocidas. Sirven para NO confundir una cantidad con
+# unidad (p.ej. "2.44105 MW") con un importe monetario.
+_UNIDADES_MEDIDA = {"kwh", "kw", "mwh", "mw", "m3", "gj", "mmbtu", "unidad", "unidades"}
+
 # Regex para separar "NOMBRE CONCEPTO 1 kWh" → (nombre, cantidad, unidad)
 # Captura: texto libre, número opcional (entero o decimal), unidad opcional
 _PAT_CANTIDAD_UNIDAD = re.compile(
@@ -53,11 +57,15 @@ _PAT_CANTIDAD_UNIDAD = re.compile(
 )
 
 # Formato de un IMPORTE monetario: dígitos con separador de miles opcional
-# y 1-2 decimales (p.ej. "22,789,532.00", "1708.18", "-5,124.53").
+# y AL MENOS un decimal (p.ej. "22,789,532.00", "1,708.1835", "-5,124.53").
 # Se usa para localizar el monto por su FORMA, no por su posición X, de modo
-# que la extracción funcione aunque la columna esté en otro lugar. Un año
-# suelto como "2025"/"2026" NO cumple (no tiene decimales) y se ignora.
-_PAT_MONTO = re.compile(r"^-?\d[\d,]*\.\d{1,2}$")
+# que la extracción funcione aunque la columna esté en otro lugar.
+#
+# IMPORTANTE: antes se limitaba a 1-2 decimales (\d{1,2}); eso PERDÍA los
+# importes/tarifas con más decimales y volvía impreciso el resultado. Ahora
+# acepta \d+ decimales para conservar toda la precisión del PDF. Un año
+# suelto como "2025"/"2026" NO cumple (no tiene punto decimal) y se ignora.
+_PAT_MONTO = re.compile(r"^-?\d[\d,]*\.\d+$")
 
 
 def _convertir_monto(valor: str) -> Optional[float]:
@@ -93,8 +101,7 @@ def _parsear_descripcion(texto: str) -> tuple[str, float, Optional[str]]:
             cantidad = float(cantidad_str)
             # Solo aceptar unidades de medida conocidas para evitar
             # partir "RELIQ CONTRATO DC 2025" en nombre="RELIQ CONTRATO DC" + cantidad=2025
-            UNIDADES_VALIDAS = {"kwh", "kw", "mwh", "mw", "m3", "gj", "mmbtu", "unidad", "unidades"}
-            if unidad.lower() in UNIDADES_VALIDAS:
+            if unidad.lower() in _UNIDADES_MEDIDA:
                 return nombre, cantidad, unidad
         except ValueError:
             pass
@@ -168,6 +175,15 @@ def extraer_detalle(palabras: list, numero_documento: Optional[str] = None) -> l
         idx_monto = None
         for i in range(len(linea_ord) - 1, -1, -1):
             if _PAT_MONTO.match(linea_ord[i]["text"].strip()):
+                # No confundir una CANTIDAD con unidad (p.ej. "2.44105 MW")
+                # con un importe: si el token siguiente es una unidad de
+                # medida, este número es la cantidad, no el monto.
+                siguiente = (
+                    linea_ord[i + 1]["text"].strip().lower().rstrip(".")
+                    if i + 1 < len(linea_ord) else ""
+                )
+                if siguiente in _UNIDADES_MEDIDA:
+                    continue
                 idx_monto = i
                 break
 

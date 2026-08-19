@@ -44,6 +44,11 @@ FUENTE_D   = Font(size=10)
 
 FORMATO_FECHA = "DD/MM/YYYY"
 FORMATO_NUM   = "#,##0.00"
+# Precio Unitario y Tasa de Cambio son TASAS, no importes redondeables a
+# centavos: mostrarlos con 2 decimales hace que al reconstruir el total
+# (precio × cantidad) el resultado no cuadre. Se muestran con hasta 6
+# decimales (mínimo 2), conservando la precisión sin ensuciar los enteros.
+FORMATO_NUM_PRECIO = "#,##0.00####"
 
 NOMBRE_HOJA = "Facturacion"
 
@@ -485,9 +490,13 @@ def _escribir_hoja(wb: Workbook, filas: list, cols: list):
             if isinstance(valor, datetime):
                 celda.number_format = FORMATO_FECHA
             elif isinstance(valor, (int, float)) and _es_columna_monetaria(encabezado_col):
-                # Importes (Precio Unitario, Monto…) como número con formato
-                # de moneda, no como texto ni número plano.
-                celda.number_format = FORMATO_NUM
+                # Importes como número con formato de moneda (no texto).
+                # Precio Unitario y Tasa de Cambio conservan más decimales
+                # para que el total reconstruido cuadre; el resto, 2 decimales.
+                h = str(encabezado_col).lower()
+                celda.number_format = (
+                    FORMATO_NUM_PRECIO if ("precio" in h or "tasa" in h) else FORMATO_NUM
+                )
 
             celda.alignment = alin_nota if clave == "nota" else alin_izq
             celda.font = FUENTE_E if tipo == "E" else FUENTE_D
